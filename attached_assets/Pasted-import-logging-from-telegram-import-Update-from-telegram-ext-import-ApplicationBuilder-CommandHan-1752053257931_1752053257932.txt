@@ -1,0 +1,103 @@
+import logging
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+import datetime
+import json
+import requests
+
+TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
+ADMIN_ID = 123456789  # thay bằng ID Telegram của em nếu cần
+KEYS_FILE = "keys.json"
+API_URL = "https://api.sunwin.fake/linkapi"  # thay bằng API chuẩn nếu có
+
+logging.basicConfig(level=logging.INFO)
+
+# Load và lưu key
+def load_keys():
+    try:
+        with open(KEYS_FILE, "r") as f:
+            return json.load(f)
+    except:
+        return {}
+
+def save_keys(keys):
+    with open(KEYS_FILE, "w") as f:
+        json.dump(keys, f)
+
+# Tạo key mới
+def create_key(user_id, start_date, end_date):
+    keys = load_keys()
+    keys[str(user_id)] = {
+        "start": start_date.strftime("%Y-%m-%d"),
+        "end": end_date.strftime("%Y-%m-%d")
+    }
+    save_keys(keys)
+
+# Kiểm tra key còn hạn
+def is_key_valid(user_id):
+    keys = load_keys()
+    info = keys.get(str(user_id))
+    if not info:
+        return False
+    today = datetime.date.today()
+    end_date = datetime.datetime.strptime(info["end"], "%Y-%m-%d").date()
+    return today <= end_date
+
+# Gọi API SunWin
+def fetch_data_from_api():
+    try:
+        response = requests.get(API_URL)
+        if response.status_code == 200:
+            return response.text
+        else:
+            return "Lỗi API: " + str(response.status_code)
+    except:
+        return "Không thể kết nối API."
+
+# /start
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if is_key_valid(user_id):
+        await update.message.reply_text("✅ Key hợp lệ! Bạn có thể dùng bot.")
+    else:
+        await update.message.reply_text("🔒 Bạn chưa có key hoặc đã hết hạn. Liên hệ admin để nhận key.")
+
+# /taokey YYYY-MM-DD đến YYYY-MM-DD
+async def taokey(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("❌ Bạn không có quyền sử dụng lệnh này.")
+        return
+
+    try:
+        args = " ".join(context.args)
+        parts = args.split("đến")
+        start = datetime.datetime.strptime(parts[0].strip(), "%Y-%m-%d").date()
+        end = datetime.datetime.strptime(parts[1].strip(), "%Y-%m-%d").date()
+        if update.message.reply_to_message:
+            target_id = update.message.reply_to_message.from_user.id
+        else:
+            target_id = user_id
+        create_key(target_id, start, end)
+        await update.message.reply_text(f"✅ Đã tạo key từ {start} đến {end} cho user {target_id}.")
+    except:
+        await update.message.reply_text("❌ Sai cú pháp. Dùng: /taokey YYYY-MM-DD đến YYYY-MM-DD (trả lời tin nhắn người cần key nếu không phải chính em).")
+
+# /data
+async def getdata(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_key_valid(user_id):
+        await update.message.reply_text("🔒 Key hết hạn hoặc không tồn tại.")
+        return
+
+    data = fetch_data_from_api()
+    await update.message.reply_text(f"Dữ liệu: {data}")
+
+# Main
+app = ApplicationBuilder().token(TOKEN).build()
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("taokey", taokey))
+app.add_handler(CommandHandler("data", getdata))
+
+if _name_ == "_main_":
+    app.run_polling()
